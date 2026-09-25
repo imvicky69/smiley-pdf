@@ -7,6 +7,9 @@ import 'package:google_fonts/google_fonts.dart';
 import 'core/constants/app_constants.dart';
 import 'core/models/recent_file.dart';
 import 'core/services/recent_files_service.dart';
+import 'features/home/presentation/widgets/app_bottom_nav_bar.dart';
+import 'features/home/presentation/widgets/placeholder_tab_view.dart';
+import 'features/home/presentation/widgets/quick_tools_section.dart';
 import 'features/home/presentation/widgets/recent_file_card.dart';
 import 'pdf_viewer_screen.dart';
 
@@ -101,6 +104,7 @@ class HomeOrganizer extends StatefulWidget {
 
 class _HomeOrganizerState extends State<HomeOrganizer> {
   late StreamSubscription<List<SharedMediaFile>> _intentDataStreamSubscription;
+  int _currentNavIndex = 0;
 
   @override
   void initState() {
@@ -212,73 +216,181 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
   Widget build(BuildContext context) {
     const Color primaryBlue = Color(0xFF2596BE);
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        titleSpacing: 16,
-        title: Row(
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: primaryBlue.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              padding: const EdgeInsets.all(5),
-              child: Image.asset(
-                'assets/images/appIcon_foreground.png',
-                fit: BoxFit.contain,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              AppConstants.appName,
-              style: GoogleFonts.prompt(
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-                color: const Color(0xFF1E293B),
-              ),
-            ),
-          ],
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(
+    final List<Widget> pages = [
+      _buildHomeBody(primaryBlue),
+      PlaceholderTabView(
+        title: 'Library',
+        description: 'Organize, tag, and browse all PDF documents across your device.',
+        icon: Icons.folder_copy_rounded,
+        actionLabel: 'Browse PDFs',
+        onAction: _pickFileManually,
+      ),
+      PlaceholderTabView(
+        title: 'Search',
+        description: 'Search document titles, metadata, and OCR-extracted text across all your files.',
+        icon: Icons.search_rounded,
+        extraContent: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
             color: const Color(0xFFF1F5F9),
-            height: 1,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.search_rounded, color: Color(0xFF94A3B8), size: 20),
+              const SizedBox(width: 10),
+              Text(
+                'Search across your documents...',
+                style: GoogleFonts.rubik(
+                  fontSize: 13,
+                  color: const Color(0xFF94A3B8),
+                ),
+              ),
+            ],
           ),
         ),
       ),
-      body: SafeArea(
-        child: ValueListenableBuilder<List<RecentFile>>(
-          valueListenable: RecentFilesService.instance.recentFilesNotifier,
-          builder: (context, recents, _) {
-            if (recents.isEmpty) {
-              return _buildEmptyState(primaryBlue);
-            }
-            return _buildRecentsState(recents, primaryBlue);
-          },
+      PlaceholderTabView(
+        title: 'Account',
+        description: 'Manage viewer preferences, customize app theme, and security settings.',
+        icon: Icons.person_rounded,
+        extraContent: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: primaryBlue.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.all(5),
+                child: Image.asset(
+                  'assets/images/appIcon_foreground.png',
+                  fit: BoxFit.contain,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Smiley PDF',
+                    style: GoogleFonts.prompt(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF1E293B),
+                    ),
+                  ),
+                  Text(
+                    'Version 1.0.0 (Release)',
+                    style: GoogleFonts.rubik(
+                      fontSize: 12,
+                      color: const Color(0xFF64748B),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
-      floatingActionButton: ValueListenableBuilder<List<RecentFile>>(
+    ];
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: _currentNavIndex == 0
+          ? AppBar(
+              titleSpacing: 16,
+              title: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: primaryBlue.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    padding: const EdgeInsets.all(5),
+                    child: Image.asset(
+                      'assets/images/appIcon_foreground.png',
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    AppConstants.appName,
+                    style: GoogleFonts.prompt(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF1E293B),
+                    ),
+                  ),
+                ],
+              ),
+              bottom: PreferredSize(
+                preferredSize: const Size.fromHeight(1),
+                child: Container(
+                  color: const Color(0xFFF1F5F9),
+                  height: 1,
+                ),
+              ),
+            )
+          : null,
+      body: IndexedStack(
+        index: _currentNavIndex,
+        children: pages,
+      ),
+      bottomNavigationBar: AppBottomNavBar(
+        currentIndex: _currentNavIndex,
+        onTabSelected: (index) {
+          setState(() {
+            _currentNavIndex = index;
+          });
+        },
+      ),
+      floatingActionButton: _currentNavIndex == 0
+          ? ValueListenableBuilder<List<RecentFile>>(
+              valueListenable: RecentFilesService.instance.recentFilesNotifier,
+              builder: (context, recents, _) {
+                if (recents.isEmpty) return const SizedBox.shrink();
+                return FloatingActionButton.extended(
+                  onPressed: _pickFileManually,
+                  backgroundColor: primaryBlue,
+                  foregroundColor: Colors.white,
+                  elevation: 3,
+                  icon: const Icon(Icons.add_rounded, size: 22),
+                  label: Text(
+                    'Open PDF',
+                    style: GoogleFonts.rubik(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                );
+              },
+            )
+          : null,
+    );
+  }
+
+  Widget _buildHomeBody(Color primaryBlue) {
+    return SafeArea(
+      child: ValueListenableBuilder<List<RecentFile>>(
         valueListenable: RecentFilesService.instance.recentFilesNotifier,
         builder: (context, recents, _) {
-          if (recents.isEmpty) return const SizedBox.shrink();
-          return FloatingActionButton.extended(
-            onPressed: _pickFileManually,
-            backgroundColor: primaryBlue,
-            foregroundColor: Colors.white,
-            elevation: 3,
-            icon: const Icon(Icons.add_rounded, size: 22),
-            label: Text(
-              'Open PDF',
-              style: GoogleFonts.rubik(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          );
+          if (recents.isEmpty) {
+            return _buildEmptyState(primaryBlue);
+          }
+          return _buildRecentsState(recents, primaryBlue);
         },
       ),
     );
@@ -287,14 +399,18 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
   Widget _buildEmptyState(Color primaryBlue) {
     return Center(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            // Quick Tools section above or below
+            const QuickToolsSection(),
+            const SizedBox(height: 24),
+
             // Real Smiley PDF Logo in hero circle
             Container(
-              width: 130,
-              height: 130,
+              width: 120,
+              height: 120,
               decoration: BoxDecoration(
                 color: primaryBlue.withValues(alpha: 0.08),
                 shape: BoxShape.circle,
@@ -306,19 +422,19 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
                   ),
                 ],
               ),
-              padding: const EdgeInsets.all(22),
+              padding: const EdgeInsets.all(20),
               child: Image.asset(
                 'assets/images/appIcon_foreground.png',
                 fit: BoxFit.contain,
               ),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 24),
 
             // Clean headline & subtitle
             Text(
               AppConstants.appName,
               style: GoogleFonts.prompt(
-                fontSize: 26,
+                fontSize: 24,
                 fontWeight: FontWeight.w700,
                 color: const Color(0xFF1E293B),
               ),
@@ -330,13 +446,13 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
                 'Open and read your PDF documents seamlessly, or receive files shared from other apps.',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.rubik(
-                  fontSize: 14,
+                  fontSize: 13.5,
                   color: const Color(0xFF64748B),
                   height: 1.45,
                 ),
               ),
             ),
-            const SizedBox(height: 36),
+            const SizedBox(height: 32),
 
             // Single, prominent Open PDF action button
             SizedBox(
@@ -363,7 +479,7 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             Text(
               'Supports .pdf files',
               style: GoogleFonts.rubik(
@@ -381,88 +497,12 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Top quick-browse banner
-        Container(
-          margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF2596BE), Color(0xFF1B7A9D)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(18),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF2596BE).withValues(alpha: 0.25),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.folder_open_rounded,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Open Document',
-                      style: GoogleFonts.prompt(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Browse device files',
-                      style: GoogleFonts.rubik(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.85),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              ElevatedButton(
-                onPressed: _pickFileManually,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: primaryBlue,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  textStyle: GoogleFonts.rubik(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                child: const Text('Browse'),
-              ),
-            ],
-          ),
-        ),
+        // Placeholder buttons for OCR, Scan Document, Protect PDF
+        const QuickToolsSection(),
 
         // Section Header: "Recently Viewed" with count badge & Clear all
         Padding(
-          padding: const EdgeInsets.fromLTRB(18, 8, 16, 8),
+          padding: const EdgeInsets.fromLTRB(18, 4, 16, 6),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -471,7 +511,7 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
                   Text(
                     'Recently Viewed',
                     style: GoogleFonts.prompt(
-                      fontSize: 17,
+                      fontSize: 16.5,
                       fontWeight: FontWeight.w700,
                       color: const Color(0xFF1E293B),
                     ),
