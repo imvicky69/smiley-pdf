@@ -1,21 +1,24 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class FolderCategory {
   final String id;
   final String name;
+  final String subtitle;
   final String path;
   final bool exists;
-  final bool isCustomLinked;
+  final bool requiresPermission;
 
   const FolderCategory({
     required this.id,
     required this.name,
+    required this.subtitle,
     required this.path,
     required this.exists,
-    this.isCustomLinked = false,
+    this.requiresPermission = false,
   });
 }
 
@@ -25,49 +28,101 @@ class LibraryFolderService {
 
   static const String _linkedFoldersPrefix = 'smiley_pdf_linked_folder_';
 
-  /// Play Store compliant permission check.
-  /// Uses standard storage permission (no MANAGE_EXTERNAL_STORAGE).
+  /// Standard Play Store compliant storage permission check.
   Future<bool> hasPermission() async {
     if (!Platform.isAndroid) return true;
-
     try {
-      final storage = await Permission.storage.status;
-      if (storage.isGranted) return true;
-
-      // On some Android 11+ devices, test if public folder is directly accessible
-      final testDir = Directory('/storage/emulated/0/Download');
-      if (testDir.existsSync()) {
-        try {
-          testDir.listSync();
-          return true;
-        } catch (_) {}
-      }
+      final status = await Permission.storage.status;
+      return status.isGranted;
     } catch (e) {
       debugPrint('Error checking permission: $e');
+      return false;
     }
-    return false;
   }
 
-  /// Request standard storage permission (100% Google Play Store safe).
+  /// Request standard storage permission.
   Future<bool> requestPermission() async {
     if (!Platform.isAndroid) return true;
-
     try {
-      final storage = await Permission.storage.request();
-      if (storage.isGranted) return true;
-
-      // Check if direct access works regardless
-      final testDir = Directory('/storage/emulated/0/Download');
-      if (testDir.existsSync()) {
-        try {
-          testDir.listSync();
-          return true;
-        } catch (_) {}
-      }
+      final status = await Permission.storage.request();
+      return status.isGranted;
     } catch (e) {
       debugPrint('Error requesting permission: $e');
+      return false;
     }
-    return false;
+  }
+
+  /// Check if the user has permanently denied permission (to show open app settings).
+  Future<bool> isPermanentlyDenied() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await Permission.storage.isPermanentlyDenied;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Exclusive app folder for saved PDFs (always accessible).
+  Future<Directory> getAppSavedDirectory() async {
+    // 1. Try public Documents/Smiley PDF if external storage is granted
+    try {
+      if (await hasPermission()) {
+        final publicDir = Directory('/storage/emulated/0/Documents/Smiley PDF');
+        if (!publicDir.existsSync()) {
+          publicDir.createSync(recursive: true);
+        }
+        return publicDir;
+      }
+    } catch (_) {}
+
+    // 2. Fallback to app external files dir (always accessible without permission)
+    try {
+      final extDir = await getExternalStorageDirectory();
+      if (extDir != null) {
+        final savedDir = Directory('${extDir.path}/Saved PDFs');
+        if (!savedDir.existsSync()) {
+          savedDir.createSync(recursive: true);
+        }
+        return savedDir;
+      }
+    } catch (_) {}
+
+    // 3. Fallback to app doc dir
+    final appDocDir = await getApplicationDocumentsDirectory();
+    final savedDir = Directory('${appDocDir.path}/Saved PDFs');
+    if (!savedDir.existsSync()) {
+      savedDir.createSync(recursive: true);
+    }
+    return savedDir;
+  }
+
+  /// Copies any PDF (from cache, picker, etc.) into the exclusive app saved folder.
+  Future<File?> savePdfToAppFolder(String sourcePath) async {
+    try {
+      final source = File(sourcePath);
+      if (!source.existsSync()) return null;
+
+      final savedDir = await getAppSavedDirectory();
+      final fileName = source.path.split(RegExp(r'[\\/]')).last;
+      String destinationPath = '${savedDir.path}/$fileName';
+
+      int counter = 1;
+      while (File(destinationPath).existsSync()) {
+        final dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex > 0) {
+          final base = fileName.substring(0, dotIndex);
+          destinationPath = '${savedDir.path}/${base}_$counter.pdf';
+        } else {
+          destinationPath = '${savedDir.path}/${fileName}_$counter.pdf';
+        }
+        counter++;
+      }
+
+      return await source.copy(destinationPath);
+    } catch (e) {
+      debugPrint('Error saving PDF to app folder: $e');
+      return null;
+    }
   }
 
   Future<void> saveLinkedFolder(String id, String path) async {
@@ -91,45 +146,27 @@ class LibraryFolderService {
   Future<List<FolderCategory>> getDetectedFolders() async {
     final List<FolderCategory> categories = [];
 
-    // 1. Download Folder
-    final customDownload = await getLinkedFolder('downloads');
-    if (customDownload != null && Directory(customDownload).existsSync()) {
-      categories.add(FolderCategory(
-        id: 'downloads',
-        name: 'Downloads',
-        path: customDownload,
-        exists: true,
-        isCustomLinked: true,
-      ));
-    } else {
-      final downloadCandidates = [
-        '/storage/emulated/0/Download',
-        '/sdcard/Download',
-      ];
-      String? foundDownload;
-      for (final p in downloadCandidates) {
-        if (Directory(p).existsSync()) {
-          foundDownload = p;
-          break;
-        }
-      }
-      categories.add(FolderCategory(
-        id: 'downloads',
-        name: 'Downloads',
-        path: foundDownload ?? downloadCandidates.first,
-        exists: foundDownload != null,
-      ));
-    }
+    // 1. Exclusive App Saved PDFs (Requires NO permission)
+    final savedDir = await getAppSavedDirectory();
+    categories.add(FolderCategory(
+      id: 'saved',
+      name: 'Saved PDFs',
+      subtitle: 'Exclusive app storage',
+      path: savedDir.path,
+      exists: true,
+      requiresPermission: false,
+    ));
 
-    // 2. WhatsApp Documents (Auto-detects modern scoped path & legacy path)
+    // 2. WhatsApp Documents (Auto-detects modern Android/media and legacy paths)
     final customWhatsApp = await getLinkedFolder('whatsapp');
     if (customWhatsApp != null && Directory(customWhatsApp).existsSync()) {
       categories.add(FolderCategory(
         id: 'whatsapp',
         name: 'WhatsApp',
+        subtitle: 'Received & Sent',
         path: customWhatsApp,
         exists: true,
-        isCustomLinked: true,
+        requiresPermission: true,
       ));
     } else {
       final whatsAppCandidates = [
@@ -146,41 +183,44 @@ class LibraryFolderService {
       categories.add(FolderCategory(
         id: 'whatsapp',
         name: 'WhatsApp',
+        subtitle: 'Received & Sent',
         path: foundWhatsAppPath ?? whatsAppCandidates.first,
         exists: foundWhatsAppPath != null,
+        requiresPermission: true,
       ));
     }
 
-    // 3. WhatsApp Business (Optional)
-    final customWb = await getLinkedFolder('whatsapp_business');
-    if (customWb != null && Directory(customWb).existsSync()) {
+    // 3. Download Folder
+    final customDownload = await getLinkedFolder('downloads');
+    if (customDownload != null && Directory(customDownload).existsSync()) {
       categories.add(FolderCategory(
-        id: 'whatsapp_business',
-        name: 'WhatsApp Business',
-        path: customWb,
+        id: 'downloads',
+        name: 'Downloads',
+        subtitle: 'Device downloads',
+        path: customDownload,
         exists: true,
-        isCustomLinked: true,
+        requiresPermission: true,
       ));
     } else {
-      final wbCandidates = [
-        '/storage/emulated/0/Android/media/com.whatsapp.w4b/WhatsApp Business/Media/WhatsApp Business Documents',
-        '/storage/emulated/0/WhatsApp Business/Media/WhatsApp Business Documents',
+      final downloadCandidates = [
+        '/storage/emulated/0/Download',
+        '/sdcard/Download',
       ];
-      String? foundWb;
-      for (final p in wbCandidates) {
+      String? foundDownload;
+      for (final p in downloadCandidates) {
         if (Directory(p).existsSync()) {
-          foundWb = p;
+          foundDownload = p;
           break;
         }
       }
-      if (foundWb != null) {
-        categories.add(FolderCategory(
-          id: 'whatsapp_business',
-          name: 'WhatsApp Business',
-          path: foundWb,
-          exists: true,
-        ));
-      }
+      categories.add(FolderCategory(
+        id: 'downloads',
+        name: 'Downloads',
+        subtitle: 'Device downloads',
+        path: foundDownload ?? downloadCandidates.first,
+        exists: foundDownload != null,
+        requiresPermission: true,
+      ));
     }
 
     // 4. Documents Folder
@@ -189,17 +229,20 @@ class LibraryFolderService {
       categories.add(FolderCategory(
         id: 'documents',
         name: 'Documents',
+        subtitle: 'Device documents',
         path: customDocs,
         exists: true,
-        isCustomLinked: true,
+        requiresPermission: true,
       ));
     } else {
       const docsCandidate = '/storage/emulated/0/Documents';
       categories.add(FolderCategory(
         id: 'documents',
         name: 'Documents',
+        subtitle: 'Device documents',
         path: docsCandidate,
         exists: Directory(docsCandidate).existsSync(),
+        requiresPermission: true,
       ));
     }
 
@@ -218,8 +261,10 @@ class LibraryFolderService {
       Future<void> scanDirectory(Directory dir) async {
         if (!dir.existsSync()) return;
         try {
-          await for (final entity in dir.list(recursive: false, followLinks: false)) {
-            if (entity is File && entity.path.toLowerCase().endsWith('.pdf')) {
+          await for (final entity
+              in dir.list(recursive: false, followLinks: false)) {
+            if (entity is File &&
+                entity.path.toLowerCase().endsWith('.pdf')) {
               pdfFiles.add(entity);
             }
           }
@@ -295,7 +340,8 @@ class LibraryFolderService {
     return false;
   }
 
-  Future<File?> copyPdfToFolder(String sourceFilePath, String targetFolderPath) async {
+  Future<File?> copyPdfToFolder(
+      String sourceFilePath, String targetFolderPath) async {
     try {
       final source = File(sourceFilePath);
       if (!source.existsSync()) return null;
@@ -315,7 +361,7 @@ class LibraryFolderService {
           final base = fileName.substring(0, dotIndex);
           destinationPath = '$targetFolderPath/${base}_$counter.pdf';
         } else {
-          destinationPath = '$targetFolderPath/${fileName}_$counter';
+          destinationPath = '$targetFolderPath/${fileName}_$counter.pdf';
         }
         counter++;
       }

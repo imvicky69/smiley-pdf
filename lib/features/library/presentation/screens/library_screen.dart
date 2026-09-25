@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/services/library_folder_service.dart';
@@ -29,6 +30,9 @@ class _LibraryScreenState extends State<LibraryScreen>
   List<File> _currentFiles = [];
   bool _isLoadingFiles = false;
 
+  // Track counts per folder category
+  final Map<String, int> _folderCounts = {};
+
   @override
   void initState() {
     super.initState();
@@ -52,37 +56,132 @@ class _LibraryScreenState extends State<LibraryScreen>
   Future<void> _checkPermissionAndLoad() async {
     setState(() => _isLoading = true);
     final hasPerm = await LibraryFolderService.instance.hasPermission();
-    if (!mounted) return;
+    final folders = await LibraryFolderService.instance.getDetectedFolders();
 
+    if (!mounted) return;
     setState(() {
       _hasPermission = hasPerm;
+      _folders = folders;
       _isLoading = false;
     });
 
-    await _loadFoldersAndFiles();
+    await _loadFilesInSelectedFolder();
+    _refreshFolderCounts();
+  }
+
+  Future<void> _refreshFolderCounts() async {
+    for (final folder in _folders) {
+      if (!folder.requiresPermission || _hasPermission) {
+        final count =
+            (await LibraryFolderService.instance.getPdfsInFolder(folder.path))
+                .length;
+        if (mounted) {
+          setState(() {
+            _folderCounts[folder.id] = count;
+          });
+        }
+      }
+    }
   }
 
   Future<void> _requestPermission() async {
     final granted = await LibraryFolderService.instance.requestPermission();
     if (!mounted) return;
+
     setState(() {
       _hasPermission = granted;
     });
-    await _loadFoldersAndFiles();
+
+    if (granted) {
+      await _loadFilesInSelectedFolder();
+      _refreshFolderCounts();
+    } else {
+      final isPermDenied =
+          await LibraryFolderService.instance.isPermanentlyDenied();
+      if (!mounted) return;
+      if (isPermDenied) {
+        _showSettingsDialog();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Storage permission is required to read WhatsApp and device folders.',
+              style: GoogleFonts.rubik(fontSize: 13),
+            ),
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+    }
   }
 
-  Future<void> _loadFoldersAndFiles() async {
-    final folders = await LibraryFolderService.instance.getDetectedFolders();
-    if (!mounted) return;
-    setState(() {
-      _folders = folders;
-      if (_selectedFolderIndex >= folders.length) {
-        _selectedFolderIndex = 0;
-      }
-    });
-    if (folders.isNotEmpty) {
-      _loadFilesInSelectedFolder();
+  void _showSettingsDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Permission Needed',
+          style: GoogleFonts.prompt(fontSize: 18, fontWeight: FontWeight.w600),
+        ),
+        content: Text(
+          'Storage permission was previously denied. Please enable it in Settings to let Smiley PDF view your WhatsApp and Downloads folders.',
+          style: GoogleFonts.rubik(fontSize: 14, color: const Color(0xFF64748B)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.rubik(color: const Color(0xFF64748B)),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              openAppSettings();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2596BE),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            child: Text(
+              'Open Settings',
+              style: GoogleFonts.rubik(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadFilesInSelectedFolder() async {
+    if (_folders.isEmpty) return;
+    final folder = _folders[_selectedFolderIndex];
+
+    if (folder.requiresPermission && !_hasPermission) {
+      setState(() {
+        _currentFiles = [];
+        _isLoadingFiles = false;
+      });
+      return;
     }
+
+    setState(() => _isLoadingFiles = true);
+    final files =
+        await LibraryFolderService.instance.getPdfsInFolder(folder.path);
+    if (!mounted) return;
+
+    setState(() {
+      _currentFiles = files;
+      _folderCounts[folder.id] = files.length;
+      _isLoadingFiles = false;
+    });
   }
 
   Future<void> _linkCustomFolder() async {
@@ -106,24 +205,9 @@ class _LibraryScreenState extends State<LibraryScreen>
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
         );
-        _loadFoldersAndFiles();
+        _checkPermissionAndLoad();
       }
     }
-  }
-
-  Future<void> _loadFilesInSelectedFolder() async {
-    if (_folders.isEmpty) return;
-    final folder = _folders[_selectedFolderIndex];
-    setState(() => _isLoadingFiles = true);
-
-    final files =
-        await LibraryFolderService.instance.getPdfsInFolder(folder.path);
-    if (!mounted) return;
-
-    setState(() {
-      _currentFiles = files;
-      _isLoadingFiles = false;
-    });
   }
 
   void _openPdf(String path) {
@@ -325,7 +409,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         if (copied != null) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Added to ${folder.name}'),
+              content: Text('Saved to ${folder.name}'),
               backgroundColor: const Color(0xFF0D9488),
               behavior: SnackBarBehavior.floating,
               shape: RoundedRectangleBorder(
@@ -365,13 +449,19 @@ class _LibraryScreenState extends State<LibraryScreen>
     const Color primaryBlue = Color(0xFF2596BE);
     const Color textDark = Color(0xFF1E293B);
 
+    final selectedFolder =
+        _folders.isNotEmpty ? _folders[_selectedFolderIndex] : null;
+    final bool isFolderBlockedByPermission =
+        selectedFolder?.requiresPermission == true && !_hasPermission;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
+        titleSpacing: 20,
         title: Text(
           'Library',
           style: GoogleFonts.prompt(
-            fontSize: 20,
+            fontSize: 21,
             fontWeight: FontWeight.w700,
             color: textDark,
           ),
@@ -381,12 +471,12 @@ class _LibraryScreenState extends State<LibraryScreen>
             icon: const Icon(Icons.refresh_rounded, size: 22),
             tooltip: 'Refresh',
             onPressed: () {
-              _loadFoldersAndFiles();
+              _checkPermissionAndLoad();
             },
           ),
           IconButton(
             icon: const Icon(Icons.folder_open_rounded, size: 22),
-            tooltip: 'Browse storage',
+            tooltip: 'Browse device',
             onPressed: widget.onPickManual,
           ),
         ],
@@ -398,134 +488,211 @@ class _LibraryScreenState extends State<LibraryScreen>
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Optional storage permission banner if not granted
-                if (!_hasPermission) _buildPermissionBanner(primaryBlue),
+                // Prominent Category Tiles
+                if (_folders.isNotEmpty) _buildCategoryTiles(primaryBlue),
 
-                // Folder selection chips (Downloads, WhatsApp, Documents, Link Folder)
-                if (_folders.isNotEmpty) _buildFolderSelector(primaryBlue),
+                const Divider(color: Color(0xFFF1F5F9), height: 1, thickness: 1),
 
-                // Content list
+                // Content list or permission prompt
                 Expanded(
-                  child: _isLoadingFiles
-                      ? const Center(child: CircularProgressIndicator())
-                      : _currentFiles.isEmpty
-                          ? _buildEmptyFolderState(primaryBlue)
-                          : _buildFileList(primaryBlue),
+                  child: isFolderBlockedByPermission
+                      ? _buildPermissionPrompt(selectedFolder!, primaryBlue)
+                      : _isLoadingFiles
+                          ? const Center(child: CircularProgressIndicator())
+                          : _currentFiles.isEmpty
+                              ? _buildEmptyFolderState(
+                                  selectedFolder!, primaryBlue)
+                              : _buildFileList(primaryBlue),
                 ),
               ],
             ),
     );
   }
 
-  Widget _buildPermissionBanner(Color primaryBlue) {
+  Widget _buildCategoryTiles(Color primaryBlue) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF0FDF4),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFBBF7D0)),
-      ),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      color: Colors.white,
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: const BoxDecoration(
-              color: Color(0xFF22C55E),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.folder_shared_rounded,
-                color: Colors.white, size: 16),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      'Folder Direct Access',
-                      style: GoogleFonts.prompt(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF14532D),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFDCFCE7),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        'OPTIONAL',
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'FOLDERS',
+                style: GoogleFonts.prompt(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF94A3B8),
+                  letterSpacing: 0.8,
+                ),
+              ),
+              InkWell(
+                onTap: _linkCustomFolder,
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.add_link_rounded,
+                          size: 14, color: Color(0xFF2596BE)),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Link Folder',
                         style: GoogleFonts.rubik(
-                          fontSize: 8.5,
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFF15803D),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFF2596BE),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  'Auto-detect WhatsApp & Download PDFs in-app. Or link folders directly without full device permissions.',
-                  style: GoogleFonts.rubik(
-                    fontSize: 11.5,
-                    color: const Color(0xFF166534),
-                    height: 1.35,
+                    ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    ElevatedButton(
-                      onPressed: _requestPermission,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF16A34A),
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 6),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        textStyle: GoogleFonts.rubik(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w600,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 86,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _folders.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 10),
+              itemBuilder: (context, index) {
+                final folder = _folders[index];
+                final isSelected = _selectedFolderIndex == index;
+                final count = _folderCounts[folder.id];
+                final isLocked = folder.requiresPermission && !_hasPermission;
+
+                Color themeColor;
+                IconData icon;
+                if (folder.id == 'saved') {
+                  themeColor = const Color(0xFF2596BE);
+                  icon = Icons.bookmark_added_rounded;
+                } else if (folder.id == 'whatsapp') {
+                  themeColor = const Color(0xFF22C55E);
+                  icon = Icons.chat_rounded;
+                } else if (folder.id == 'downloads') {
+                  themeColor = const Color(0xFF0284C7);
+                  icon = Icons.download_rounded;
+                } else {
+                  themeColor = const Color(0xFF8B5CF6);
+                  icon = Icons.description_rounded;
+                }
+
+                return Material(
+                  color: isSelected
+                      ? themeColor.withValues(alpha: 0.08)
+                      : const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(16),
+                  child: InkWell(
+                    onTap: () {
+                      if (_selectedFolderIndex != index) {
+                        setState(() => _selectedFolderIndex = index);
+                        _loadFilesInSelectedFolder();
+                      }
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: 130,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isSelected
+                              ? themeColor
+                              : const Color(0xFFE2E8F0),
+                          width: isSelected ? 1.6 : 1.0,
                         ),
                       ),
-                      child: const Text('Enable Access'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: themeColor.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  icon,
+                                  color: themeColor,
+                                  size: 18,
+                                ),
+                              ),
+                              if (isLocked)
+                                Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFEE2E2),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: const Icon(
+                                    Icons.lock_rounded,
+                                    size: 12,
+                                    color: Color(0xFFDC2626),
+                                  ),
+                                )
+                              else if (count != null)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: themeColor.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    '$count',
+                                    style: GoogleFonts.rubik(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: themeColor,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                folder.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.prompt(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: const Color(0xFF1E293B),
+                                ),
+                              ),
+                              Text(
+                                folder.subtitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.rubik(
+                                  fontSize: 9.5,
+                                  color: const Color(0xFF64748B),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(width: 12),
-                    TextButton(
-                      onPressed: _linkCustomFolder,
-                      style: TextButton.styleFrom(
-                        foregroundColor: const Color(0xFF15803D),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: Text(
-                        'Link Folder (SAF)',
-                        style: GoogleFonts.rubik(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                  ),
+                );
+              },
             ),
           ),
         ],
@@ -533,85 +700,93 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
-  Widget _buildFolderSelector(Color primaryBlue) {
-    return Container(
-      height: 48,
-      margin: const EdgeInsets.only(top: 6, bottom: 4),
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: _folders.length + 1,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          if (index == _folders.length) {
-            return ActionChip(
-              avatar: const Icon(Icons.add_link_rounded,
-                  size: 16, color: Color(0xFF2596BE)),
-              label: Text(
-                'Link Folder',
+  Widget _buildPermissionPrompt(FolderCategory folder, Color primaryBlue) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 84,
+              height: 84,
+              decoration: BoxDecoration(
+                color: const Color(0xFF22C55E).withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.folder_shared_rounded,
+                size: 40,
+                color: Color(0xFF16A34A),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Permission Required for ${folder.name}',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.prompt(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFF1E293B),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 320),
+              child: Text(
+                folder.id == 'whatsapp'
+                    ? 'Allow Smiley PDF to access your device storage to automatically read and display both received and sent WhatsApp PDFs.'
+                    : 'Allow Smiley PDF storage access to automatically browse and manage PDFs in your ${folder.name} folder.',
+                textAlign: TextAlign.center,
                 style: GoogleFonts.rubik(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: const Color(0xFF2596BE),
+                  fontSize: 13.5,
+                  color: const Color(0xFF64748B),
+                  height: 1.45,
                 ),
               ),
-              backgroundColor: const Color(0xFFF0F9FF),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side: const BorderSide(color: Color(0xFFBAE6FD)),
-              ),
-              onPressed: _linkCustomFolder,
-            );
-          }
-
-          final folder = _folders[index];
-          final isSelected = _selectedFolderIndex == index;
-
-          IconData icon;
-          if (folder.id.contains('whatsapp')) {
-            icon = Icons.chat_rounded;
-          } else if (folder.id == 'downloads') {
-            icon = Icons.download_rounded;
-          } else {
-            icon = Icons.folder_rounded;
-          }
-
-          return ChoiceChip(
-            showCheckmark: false,
-            avatar: Icon(
-              icon,
-              size: 16,
-              color: isSelected ? Colors.white : primaryBlue,
             ),
-            label: Text(folder.name),
-            labelStyle: GoogleFonts.rubik(
-              fontSize: 12.5,
-              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-              color: isSelected ? Colors.white : const Color(0xFF1E293B),
-            ),
-            selected: isSelected,
-            selectedColor: primaryBlue,
-            backgroundColor: const Color(0xFFF1F5F9),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: BorderSide(
-                color: isSelected ? primaryBlue : const Color(0xFFE2E8F0),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: 220,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: _requestPermission,
+                icon: const Icon(Icons.lock_open_rounded, size: 18),
+                label: const Text('Grant Permission'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF16A34A),
+                  foregroundColor: Colors.white,
+                  elevation: 1,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  textStyle: GoogleFonts.rubik(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
-            onSelected: (selected) {
-              if (selected && _selectedFolderIndex != index) {
-                setState(() => _selectedFolderIndex = index);
-                _loadFilesInSelectedFolder();
-              }
-            },
-          );
-        },
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: widget.onPickManual,
+              icon: const Icon(Icons.folder_open_rounded, size: 16),
+              label: const Text('Pick PDF Manually (No Permission)'),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF64748B),
+                textStyle: GoogleFonts.rubik(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildEmptyFolderState(Color primaryBlue) {
-    final folder = _folders[_selectedFolderIndex];
+  Widget _buildEmptyFolderState(FolderCategory folder, Color primaryBlue) {
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
@@ -637,23 +812,25 @@ class _LibraryScreenState extends State<LibraryScreen>
                 color: const Color(0xFF1E293B),
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             Text(
-              'Import a PDF or link a specific folder path to view files here.',
+              folder.id == 'saved'
+                  ? 'PDFs saved or imported in Smiley PDF will appear here in your exclusive app storage.'
+                  : 'Import a PDF or link a specific folder path to view files here.',
               textAlign: TextAlign.center,
               style: GoogleFonts.rubik(
                 fontSize: 12.5,
                 color: const Color(0xFF64748B),
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 20),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 ElevatedButton.icon(
                   onPressed: _importPdfToCurrentFolder,
                   icon: const Icon(Icons.add_rounded, size: 18),
-                  label: const Text('Add PDF'),
+                  label: Text(folder.id == 'saved' ? 'Save PDF Here' : 'Add PDF'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryBlue,
                     foregroundColor: Colors.white,
@@ -666,23 +843,25 @@ class _LibraryScreenState extends State<LibraryScreen>
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: _linkCustomFolder,
-                  icon: const Icon(Icons.folder_open_rounded, size: 18),
-                  label: const Text('Change Path'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: primaryBlue,
-                    side: BorderSide(color: primaryBlue),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    textStyle: GoogleFonts.rubik(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
+                if (folder.id != 'saved') ...[
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: _linkCustomFolder,
+                    icon: const Icon(Icons.folder_open_rounded, size: 18),
+                    label: const Text('Change Path'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: primaryBlue,
+                      side: BorderSide(color: primaryBlue),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      textStyle: GoogleFonts.rubik(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ),
+                ],
               ],
             ),
           ],
@@ -692,16 +871,18 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Widget _buildFileList(Color primaryBlue) {
+    final folder = _folders[_selectedFolderIndex];
+
     return Column(
       children: [
         // Action header: Count & Import button
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                '${_currentFiles.length} ${_currentFiles.length == 1 ? "document" : "documents"}',
+                '${_currentFiles.length} ${_currentFiles.length == 1 ? "document" : "documents"} in ${folder.name}',
                 style: GoogleFonts.rubik(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -714,7 +895,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                 label: const Text('Add PDF'),
                 style: TextButton.styleFrom(
                   foregroundColor: primaryBlue,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   textStyle: GoogleFonts.rubik(
