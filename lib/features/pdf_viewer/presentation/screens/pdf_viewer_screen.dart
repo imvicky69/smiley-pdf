@@ -1,15 +1,33 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+import 'package:pdfrx/pdfrx.dart';
 
-class PdfViewerScreen extends StatelessWidget {
+class PdfViewerScreen extends StatefulWidget {
   final String filePath;
 
   const PdfViewerScreen({super.key, required this.filePath});
 
+  @override
+  State<PdfViewerScreen> createState() => _PdfViewerScreenState();
+}
+
+class _PdfViewerScreenState extends State<PdfViewerScreen> {
+  // PdfViewerController extends ValueListenable<Matrix4> — no dispose() needed
+  final _controller = PdfViewerController();
+
+  // ValueNotifiers — zero setState, surgical update only for page counter
+  final _pageNumber = ValueNotifier<int>(1);
+  final _pageCount = ValueNotifier<int>(0);
+
+  @override
+  void dispose() {
+    _pageNumber.dispose();
+    _pageCount.dispose();
+    super.dispose();
+  }
+
   String get _fileName {
-    final name = filePath.split(RegExp(r'[\\/]')).last;
+    final name = widget.filePath.split(RegExp(r'[\\/]')).last;
     return name.isNotEmpty ? name : 'Document';
   }
 
@@ -19,7 +37,7 @@ class PdfViewerScreen extends StatelessWidget {
     const Color textDark = Color(0xFF1E293B);
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF1F5F9),
       appBar: AppBar(
         titleSpacing: 0,
         backgroundColor: Colors.white,
@@ -28,6 +46,7 @@ class PdfViewerScreen extends StatelessWidget {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
           onPressed: () => Navigator.pop(context),
+          tooltip: 'Back',
         ),
         title: Row(
           children: [
@@ -46,28 +65,75 @@ class PdfViewerScreen extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                _fileName,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.prompt(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                  color: textDark,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _fileName,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.prompt(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: textDark,
+                    ),
+                  ),
+                  ValueListenableBuilder<int>(
+                    valueListenable: _pageCount,
+                    builder: (_, count, _) {
+                      if (count == 0) return const SizedBox.shrink();
+                      return ValueListenableBuilder<int>(
+                        valueListenable: _pageNumber,
+                        builder: (_, page, _) => Text(
+                          'Page $page of $count',
+                          style: GoogleFonts.rubik(
+                            fontSize: 11,
+                            color: const Color(0xFF64748B),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
               ),
             ),
-            const SizedBox(width: 16),
           ],
         ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(
-            color: const Color(0xFFF1F5F9),
-            height: 1,
-          ),
+          child: Container(color: const Color(0xFFF1F5F9), height: 1),
         ),
       ),
-      body: SfPdfViewer.file(File(filePath)),
+      body: PdfViewer.file(
+        widget.filePath,
+        controller: _controller,
+        params: PdfViewerParams(
+          // PDFium renders natively off the UI thread — zero Flutter paint overhead
+          backgroundColor: const Color(0xFFF1F5F9),
+          margin: 8,
+
+          // Clamp zoom using the non-deprecated API
+          sizeDelegateProvider: PdfViewerSizeDelegateProviderLegacy(
+            minScale: 0.8,
+            maxScale: 5.0,
+          ),
+
+          // Page change fires only when the visible page actually changes —
+          // zero rebuilds during zoom/pan, only on page transitions
+          onPageChanged: (pageNumber) {
+            if (pageNumber != null) {
+              _pageNumber.value = pageNumber;
+              // Grab pageCount from controller on first page change (doc is ready)
+              if (_pageCount.value == 0 && _controller.isReady) {
+                _pageCount.value = _controller.pageCount;
+              }
+            }
+          },
+          // Text selection is disabled by default (textSelectionParams not set)
+          // — keeps gesture handling lightweight
+        ),
+      ),
     );
   }
 }
+
