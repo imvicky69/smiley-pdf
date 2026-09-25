@@ -7,13 +7,18 @@ environment:
   sdk: ^3.12.0-113.2.beta
 
 dependencies:
+  file_picker: ^13.1.0
   flutter:
     sdk: flutter
+  google_fonts: ^8.2.1
+  receive_sharing_intent: 1.8.1
+  syncfusion_flutter_pdfviewer: ^34.2.9
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
@@ -22,3 +27,11 @@ flutter:
     - assets/icons/
     - assets/images/
     - assets/documents/
+
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/images/appIcon.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/appIcon_foreground.png"
+  adaptive_icon_monochrome: "assets/images/appIcon_monochrome.png"
