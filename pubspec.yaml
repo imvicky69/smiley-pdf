@@ -1,0 +1,24 @@
+name: smiley_pdf
+description: "Smiley PDF - A modern, fast, and joyful PDF reader and document manager for Android."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.0-113.2.beta
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/icons/
+    - assets/images/
+    - assets/documents/
