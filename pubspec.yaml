@@ -16,7 +16,6 @@ dependencies:
   shared_preferences: ^2.5.5
   path_provider: ^2.1.6
   share_plus: ^13.3.0
-  permission_handler: 11.3.1
 
 dev_dependencies:
   flutter_test:
@@ -31,6 +30,29 @@ flutter:
     - assets/icons/
     - assets/images/
     - assets/documents/
+    - assets/fonts/
+
+  fonts:
+    - family: Prompt
+      fonts:
+        - asset: assets/fonts/Prompt-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Prompt-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Prompt-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Prompt-Bold.ttf
+          weight: 700
+    - family: Rubik
+      fonts:
+        - asset: assets/fonts/Rubik-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Rubik-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Rubik-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Rubik-Bold.ttf
+          weight: 700
 
 flutter_launcher_icons:
   android: true
@@ -39,3 +61,4 @@ flutter_launcher_icons:
   adaptive_icon_background: "#FFFFFF"
   adaptive_icon_foreground: "assets/images/appIcon_foreground.png"
   adaptive_icon_monochrome: "assets/images/appIcon_monochrome.png"
+

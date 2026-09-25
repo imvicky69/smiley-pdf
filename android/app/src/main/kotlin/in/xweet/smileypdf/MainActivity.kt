@@ -1,4 +1,4 @@
-package com.smileypdf.smiley_pdf
+package `in`.xweet.smileypdf
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -8,7 +8,7 @@ This repository comes clean and ready to code without default template bloat or 
 - **Clean Architecture Ready**: Structured with feature-first separation (`core`, `features`).
 - **Material 3 Theming**: Pre-configured Light & Dark themes with customized palettes in [`app_theme.dart`](lib/core/theme/app_theme.dart).
 - **Responsive & Modern UI**: Sleek, friendly interface with animated transitions and theme toggling.
-- **Android Optimized**: Android namespace configured (`com.smileypdf.smiley_pdf`), app label set to "Smiley PDF".
+- **Android Optimized**: Android namespace configured (`in.xweet.smileypdf`), app label set to "Smiley PDF".
 
 ---
 

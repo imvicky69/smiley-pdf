@@ -42,6 +42,7 @@ migrate_working_dir/
 **/android/key.properties
 **/*.keystore
 **/*.jks
+/android/build/
 
 # Symbolication & Obfuscation
 app.*.symbols

@@ -1,24 +1,18 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'recent_files_service.dart';
 
-class FolderCategory {
-  final String id;
-  final String name;
-  final String subtitle;
-  final String path;
-  final bool exists;
-  final bool requiresPermission;
+class SavePdfResult {
+  final File? file;
+  final bool isAlreadySaved;
+  final bool success;
 
-  const FolderCategory({
-    required this.id,
-    required this.name,
-    required this.subtitle,
-    required this.path,
-    required this.exists,
-    this.requiresPermission = false,
+  const SavePdfResult({
+    this.file,
+    required this.isAlreadySaved,
+    required this.success,
   });
 }
 
@@ -26,56 +20,17 @@ class LibraryFolderService {
   LibraryFolderService._();
   static final LibraryFolderService instance = LibraryFolderService._();
 
-  static const String _linkedFoldersPrefix = 'smiley_pdf_linked_folder_';
+  static const String defaultPdfName = 'Welcome to Smiley PDF.pdf';
 
-  /// Standard Play Store compliant storage permission check.
-  Future<bool> hasPermission() async {
-    if (!Platform.isAndroid) return true;
-    try {
-      final status = await Permission.storage.status;
-      return status.isGranted;
-    } catch (e) {
-      debugPrint('Error checking permission: $e');
-      return false;
-    }
+  /// Notifier bumped whenever saved files are added, renamed, or deleted
+  final ValueNotifier<int> savedChangeNotifier = ValueNotifier<int>(0);
+
+  void _notifySavedChanged() {
+    savedChangeNotifier.value++;
   }
 
-  /// Request standard storage permission.
-  Future<bool> requestPermission() async {
-    if (!Platform.isAndroid) return true;
-    try {
-      final status = await Permission.storage.request();
-      return status.isGranted;
-    } catch (e) {
-      debugPrint('Error requesting permission: $e');
-      return false;
-    }
-  }
-
-  /// Check if the user has permanently denied permission (to show open app settings).
-  Future<bool> isPermanentlyDenied() async {
-    if (!Platform.isAndroid) return false;
-    try {
-      return await Permission.storage.isPermanentlyDenied;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// Exclusive app folder for saved PDFs (always accessible).
+  /// Exclusive app folder for saved PDFs (always accessible without permissions).
   Future<Directory> getAppSavedDirectory() async {
-    // 1. Try public Documents/Smiley PDF if external storage is granted
-    try {
-      if (await hasPermission()) {
-        final publicDir = Directory('/storage/emulated/0/Documents/Smiley PDF');
-        if (!publicDir.existsSync()) {
-          publicDir.createSync(recursive: true);
-        }
-        return publicDir;
-      }
-    } catch (_) {}
-
-    // 2. Fallback to app external files dir (always accessible without permission)
     try {
       final extDir = await getExternalStorageDirectory();
       if (extDir != null) {
@@ -85,9 +40,10 @@ class LibraryFolderService {
         }
         return savedDir;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Error getting external storage dir: $e');
+    }
 
-    // 3. Fallback to app doc dir
     final appDocDir = await getApplicationDocumentsDirectory();
     final savedDir = Directory('${appDocDir.path}/Saved PDFs');
     if (!savedDir.existsSync()) {
@@ -96,16 +52,135 @@ class LibraryFolderService {
     return savedDir;
   }
 
-  /// Copies any PDF (from cache, picker, etc.) into the exclusive app saved folder.
-  Future<File?> savePdfToAppFolder(String sourcePath) async {
+  /// Ensures the default welcome PDF guide is present in the saved folder.
+  Future<File?> ensureDefaultPdfExists() async {
+    try {
+      final savedDir = await getAppSavedDirectory();
+      final defaultFile = File('${savedDir.path}/$defaultPdfName');
+
+      if (!defaultFile.existsSync() || defaultFile.lengthSync() == 0) {
+        final byteData =
+            await rootBundle.load('assets/documents/welcome_smiley_pdf.pdf');
+        final bytes = byteData.buffer.asUint8List(
+          byteData.offsetInBytes,
+          byteData.lengthInBytes,
+        );
+        await defaultFile.writeAsBytes(bytes, flush: true);
+        debugPrint('[LibraryFolderService] Installed default welcome PDF');
+        _notifySavedChanged();
+      }
+      return defaultFile;
+    } catch (e) {
+      debugPrint('[LibraryFolderService] Could not install default PDF: $e');
+      return null;
+    }
+  }
+
+  /// Returns all PDF files in the Saved PDFs directory, sorted by last modified descending.
+  Future<List<File>> getSavedPdfs() async {
+    try {
+      await ensureDefaultPdfExists();
+
+      final savedDir = await getAppSavedDirectory();
+      if (!savedDir.existsSync()) return [];
+
+      final List<File> pdfs = [];
+      await for (final entity in savedDir.list(recursive: false)) {
+        if (entity is File && entity.path.toLowerCase().endsWith('.pdf')) {
+          pdfs.add(entity);
+        }
+      }
+
+      // Sort newest first
+      pdfs.sort((a, b) {
+        try {
+          return b.lastModifiedSync().compareTo(a.lastModifiedSync());
+        } catch (_) {
+          return 0;
+        }
+      });
+
+      return pdfs;
+    } catch (e) {
+      debugPrint('[LibraryFolderService] Error getting saved PDFs: $e');
+      return [];
+    }
+  }
+
+  /// Checks if a file is already in the saved directory.
+  /// Returns the existing saved File if found, or null.
+  Future<File?> getMatchingSavedFile(String sourcePath) async {
     try {
       final source = File(sourcePath);
+      final savedDir = await getAppSavedDirectory();
+      if (!savedDir.existsSync()) return null;
+
+      final normalizedSource = source.path.replaceAll('\\', '/');
+      final normalizedSaved = savedDir.path.replaceAll('\\', '/');
+
+      // 1. Direct check: the file is already inside the saved directory
+      if (normalizedSource.startsWith(normalizedSaved)) {
+        return source.existsSync() ? source : null;
+      }
+
       if (!source.existsSync()) return null;
+      final sourceSize = source.lengthSync();
+      final fileName = source.path.split(RegExp(r'[\\/]')).last;
+
+      // 2. Check if a saved file with exact same name exists and has identical size
+      final exactCandidate = File('${savedDir.path}/$fileName');
+      if (exactCandidate.existsSync() && exactCandidate.lengthSync() == sourceSize) {
+        return exactCandidate;
+      }
+
+      // 3. Check if any numbered duplicate (e.g. document_1.pdf) has identical size and base name
+      final dotIndex = fileName.lastIndexOf('.');
+      final baseName = dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
+
+      await for (final entity in savedDir.list(recursive: false)) {
+        if (entity is File && entity.path.toLowerCase().endsWith('.pdf')) {
+          final entityName = entity.path.split(RegExp(r'[\\/]')).last;
+          if (entityName.startsWith(baseName) && entity.lengthSync() == sourceSize) {
+            return entity;
+          }
+        }
+      }
+
+      return null;
+    } catch (e) {
+      debugPrint('Error finding matching saved file: $e');
+      return null;
+    }
+  }
+
+  /// Returns true if the given file is already saved in the app's saved folder.
+  Future<bool> isPdfSaved(String sourcePath) async {
+    final match = await getMatchingSavedFile(sourcePath);
+    return match != null;
+  }
+
+  /// Copies any PDF into the app's saved folder.
+  /// If it is ALREADY saved, it returns the existing file with isAlreadySaved: true
+  /// and DOES NOT create a duplicate copy!
+  Future<SavePdfResult> savePdfToAppFolder(String sourcePath) async {
+    try {
+      final source = File(sourcePath);
+      if (!source.existsSync()) {
+        return const SavePdfResult(isAlreadySaved: false, success: false);
+      }
+
+      // 1. First check if it is already saved
+      final existing = await getMatchingSavedFile(sourcePath);
+      if (existing != null) {
+        debugPrint('[LibraryFolderService] File already saved at: ${existing.path}');
+        return SavePdfResult(file: existing, isAlreadySaved: true, success: true);
+      }
 
       final savedDir = await getAppSavedDirectory();
       final fileName = source.path.split(RegExp(r'[\\/]')).last;
       String destinationPath = '${savedDir.path}/$fileName';
 
+      // 2. If a different file exists with the same name, append counter
       int counter = 1;
       while (File(destinationPath).existsSync()) {
         final dotIndex = fileName.lastIndexOf('.');
@@ -118,197 +193,34 @@ class LibraryFolderService {
         counter++;
       }
 
-      return await source.copy(destinationPath);
+      final copiedFile = await source.copy(destinationPath);
+      debugPrint('[LibraryFolderService] Saved new PDF to ${copiedFile.path}');
+      _notifySavedChanged();
+      return SavePdfResult(file: copiedFile, isAlreadySaved: false, success: true);
     } catch (e) {
       debugPrint('Error saving PDF to app folder: $e');
-      return null;
+      return const SavePdfResult(isAlreadySaved: false, success: false);
     }
   }
 
-  Future<void> saveLinkedFolder(String id, String path) async {
+  /// Removes a saved PDF corresponding to the source path.
+  Future<bool> removeSavedPdfBySource(String sourcePath) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('$_linkedFoldersPrefix$id', path);
+      final savedFile = await getMatchingSavedFile(sourcePath);
+      if (savedFile != null && savedFile.existsSync()) {
+        await savedFile.delete();
+        debugPrint('[LibraryFolderService] Removed saved PDF: ${savedFile.path}');
+        _notifySavedChanged();
+        return true;
+      }
+      return false;
     } catch (e) {
-      debugPrint('Error saving linked folder: $e');
+      debugPrint('Error removing saved PDF by source: $e');
+      return false;
     }
   }
 
-  Future<String?> getLinkedFolder(String id) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getString('$_linkedFoldersPrefix$id');
-    } catch (e) {
-      return null;
-    }
-  }
-
-  Future<List<FolderCategory>> getDetectedFolders() async {
-    final List<FolderCategory> categories = [];
-
-    // 1. Exclusive App Saved PDFs (Requires NO permission)
-    final savedDir = await getAppSavedDirectory();
-    categories.add(FolderCategory(
-      id: 'saved',
-      name: 'Saved PDFs',
-      subtitle: 'Exclusive app storage',
-      path: savedDir.path,
-      exists: true,
-      requiresPermission: false,
-    ));
-
-    // 2. WhatsApp Documents (Auto-detects modern Android/media and legacy paths)
-    final customWhatsApp = await getLinkedFolder('whatsapp');
-    if (customWhatsApp != null && Directory(customWhatsApp).existsSync()) {
-      categories.add(FolderCategory(
-        id: 'whatsapp',
-        name: 'WhatsApp',
-        subtitle: 'Received & Sent',
-        path: customWhatsApp,
-        exists: true,
-        requiresPermission: true,
-      ));
-    } else {
-      final whatsAppCandidates = [
-        '/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents',
-        '/storage/emulated/0/WhatsApp/Media/WhatsApp Documents',
-      ];
-      String? foundWhatsAppPath;
-      for (final p in whatsAppCandidates) {
-        if (Directory(p).existsSync()) {
-          foundWhatsAppPath = p;
-          break;
-        }
-      }
-      categories.add(FolderCategory(
-        id: 'whatsapp',
-        name: 'WhatsApp',
-        subtitle: 'Received & Sent',
-        path: foundWhatsAppPath ?? whatsAppCandidates.first,
-        exists: foundWhatsAppPath != null,
-        requiresPermission: true,
-      ));
-    }
-
-    // 3. Download Folder
-    final customDownload = await getLinkedFolder('downloads');
-    if (customDownload != null && Directory(customDownload).existsSync()) {
-      categories.add(FolderCategory(
-        id: 'downloads',
-        name: 'Downloads',
-        subtitle: 'Device downloads',
-        path: customDownload,
-        exists: true,
-        requiresPermission: true,
-      ));
-    } else {
-      final downloadCandidates = [
-        '/storage/emulated/0/Download',
-        '/sdcard/Download',
-      ];
-      String? foundDownload;
-      for (final p in downloadCandidates) {
-        if (Directory(p).existsSync()) {
-          foundDownload = p;
-          break;
-        }
-      }
-      categories.add(FolderCategory(
-        id: 'downloads',
-        name: 'Downloads',
-        subtitle: 'Device downloads',
-        path: foundDownload ?? downloadCandidates.first,
-        exists: foundDownload != null,
-        requiresPermission: true,
-      ));
-    }
-
-    // 4. Documents Folder
-    final customDocs = await getLinkedFolder('documents');
-    if (customDocs != null && Directory(customDocs).existsSync()) {
-      categories.add(FolderCategory(
-        id: 'documents',
-        name: 'Documents',
-        subtitle: 'Device documents',
-        path: customDocs,
-        exists: true,
-        requiresPermission: true,
-      ));
-    } else {
-      const docsCandidate = '/storage/emulated/0/Documents';
-      categories.add(FolderCategory(
-        id: 'documents',
-        name: 'Documents',
-        subtitle: 'Device documents',
-        path: docsCandidate,
-        exists: Directory(docsCandidate).existsSync(),
-        requiresPermission: true,
-      ));
-    }
-
-    return categories;
-  }
-
-  /// Scans folder AND subfolders (such as Sent and Private for WhatsApp)
-  /// and mixes them together into a unified list.
-  Future<List<File>> getPdfsInFolder(String folderPath) async {
-    try {
-      final rootDir = Directory(folderPath);
-      if (!rootDir.existsSync()) return [];
-
-      final List<File> pdfFiles = [];
-
-      Future<void> scanDirectory(Directory dir) async {
-        if (!dir.existsSync()) return;
-        try {
-          await for (final entity
-              in dir.list(recursive: false, followLinks: false)) {
-            if (entity is File &&
-                entity.path.toLowerCase().endsWith('.pdf')) {
-              pdfFiles.add(entity);
-            }
-          }
-        } catch (e) {
-          debugPrint('Error scanning ${dir.path}: $e');
-        }
-      }
-
-      // 1. Scan primary folder (Received documents)
-      await scanDirectory(rootDir);
-
-      // 2. Scan "Sent" subfolder if present (e.g. for WhatsApp sent PDFs)
-      final sentDir = Directory('$folderPath/Sent');
-      if (sentDir.existsSync()) {
-        await scanDirectory(sentDir);
-      }
-
-      // 3. Scan "Private" subfolder if present (e.g. for WhatsApp private chats)
-      final privateDir = Directory('$folderPath/Private');
-      if (privateDir.existsSync()) {
-        await scanDirectory(privateDir);
-      }
-
-      // Sort by last modified date, newest first
-      pdfFiles.sort((a, b) {
-        try {
-          return b.lastModifiedSync().compareTo(a.lastModifiedSync());
-        } catch (_) {
-          return 0;
-        }
-      });
-
-      return pdfFiles;
-    } catch (e) {
-      debugPrint('Error listing PDFs in $folderPath: $e');
-      return [];
-    }
-  }
-
-  /// Helper to check if a PDF is from the WhatsApp Sent folder
-  bool isSentFile(String filePath) {
-    return filePath.contains('/Sent/') || filePath.contains('\\Sent\\');
-  }
-
+  /// Renames a PDF in the saved folder.
   Future<bool> renamePdf(File file, String newFileName) async {
     try {
       final sanitizedName =
@@ -320,7 +232,11 @@ class LibraryFolderService {
         return false;
       }
 
+      final oldPath = file.path;
       await file.rename(newPath);
+      RecentFilesService.instance
+          .updateFilePath(oldPath, newPath, newFileName: sanitizedName);
+      _notifySavedChanged();
       return true;
     } catch (e) {
       debugPrint('Error renaming PDF: $e');
@@ -328,10 +244,15 @@ class LibraryFolderService {
     }
   }
 
+  /// Deletes a PDF file.
   Future<bool> deletePdf(File file) async {
     try {
       if (file.existsSync()) {
+        final path = file.path;
         await file.delete();
+        RecentFilesService.instance.removeRecent(path);
+        await RecentFilesService.instance.purgeMissingFiles();
+        _notifySavedChanged();
         return true;
       }
     } catch (e) {
@@ -340,6 +261,7 @@ class LibraryFolderService {
     return false;
   }
 
+  /// Helper to copy a PDF to a specific destination folder.
   Future<File?> copyPdfToFolder(
       String sourceFilePath, String targetFolderPath) async {
     try {

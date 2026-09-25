@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
@@ -6,7 +7,9 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'core/constants/app_constants.dart';
 import 'core/models/recent_file.dart';
+import 'core/services/library_folder_service.dart';
 import 'core/services/recent_files_service.dart';
+import 'features/home/presentation/screens/all_recents_screen.dart';
 import 'features/home/presentation/widgets/app_bottom_nav_bar.dart';
 import 'features/home/presentation/widgets/placeholder_tab_view.dart';
 import 'features/home/presentation/widgets/quick_tools_section.dart';
@@ -76,7 +79,11 @@ ThemeData buildSmileyPdfTheme() {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Disable runtime font fetching — fonts are bundled in assets/fonts/
+  // This prevents SocketException errors on devices without internet.
+  GoogleFonts.config.allowRuntimeFetching = false;
   await RecentFilesService.instance.init();
+  await LibraryFolderService.instance.ensureDefaultPdfExists();
   runApp(const SmileyPdfApp());
 }
 
@@ -110,6 +117,7 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
   @override
   void initState() {
     super.initState();
+    RecentFilesService.instance.purgeMissingFiles();
     _handleExternalFiles();
   }
 
@@ -356,7 +364,9 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
           ? ValueListenableBuilder<List<RecentFile>>(
               valueListenable: RecentFilesService.instance.recentFilesNotifier,
               builder: (context, recents, _) {
-                if (recents.isEmpty) return const SizedBox.shrink();
+                final hasExisting =
+                    recents.any((f) => File(f.path).existsSync());
+                if (!hasExisting) return const SizedBox.shrink();
                 return FloatingActionButton.extended(
                   onPressed: _pickFileManually,
                   backgroundColor: primaryBlue,
@@ -382,10 +392,12 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
       child: ValueListenableBuilder<List<RecentFile>>(
         valueListenable: RecentFilesService.instance.recentFilesNotifier,
         builder: (context, recents, _) {
-          if (recents.isEmpty) {
+          final existingRecents =
+              recents.where((f) => File(f.path).existsSync()).toList();
+          if (existingRecents.isEmpty) {
             return _buildEmptyState(primaryBlue);
           }
-          return _buildRecentsState(recents, primaryBlue);
+          return _buildRecentsState(existingRecents, primaryBlue);
         },
       ),
     );
@@ -489,6 +501,10 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
   }
 
   Widget _buildRecentsState(List<RecentFile> recents, Color primaryBlue) {
+    final displayedRecents = recents.take(10).toList();
+    final bool showViewMore = recents.length > 10;
+    final int itemCount = displayedRecents.length + (showViewMore ? 1 : 0);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -501,70 +517,186 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+              InkWell(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => AllRecentsScreen(
+                        onPickManual: _pickFileManually,
+                      ),
+                    ),
+                  );
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Row(
+                  children: [
+                    Text(
+                      'Recently Viewed',
+                      style: GoogleFonts.prompt(
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF1E293B),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: primaryBlue.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${recents.length}',
+                        style: GoogleFonts.rubik(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: primaryBlue,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               Row(
                 children: [
-                  Text(
-                    'Recently Viewed',
-                    style: GoogleFonts.prompt(
-                      fontSize: 16.5,
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFF1E293B),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => AllRecentsScreen(
+                            onPickManual: _pickFileManually,
+                          ),
+                        ),
+                      );
+                    },
+                    style: TextButton.styleFrom(
+                      foregroundColor: primaryBlue,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(
+                      'View all',
+                      style: GoogleFonts.rubik(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: primaryBlue.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(12),
+                  TextButton(
+                    onPressed: _confirmClearAll,
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF94A3B8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: Text(
-                      '${recents.length}',
+                      'Clear',
                       style: GoogleFonts.rubik(
                         fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: primaryBlue,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ),
                 ],
               ),
-              TextButton(
-                onPressed: _confirmClearAll,
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF94A3B8),
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: Text(
-                  'Clear all',
-                  style: GoogleFonts.rubik(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
             ],
           ),
         ),
 
-        // List of Recently Viewed files
+        // List of Recently Viewed files (up to 10 + Archive / View More button)
         Expanded(
           child: ListView.separated(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
-            itemCount: recents.length,
+            itemCount: itemCount,
             separatorBuilder: (context, index) => const SizedBox(height: 10),
             itemBuilder: (context, index) {
-              final recent = recents[index];
-              return RecentFileCard(
-                file: recent,
-                onOpen: () => _openPdf(recent.path),
-              );
+              if (index < displayedRecents.length) {
+                final recent = displayedRecents[index];
+                return RecentFileCard(
+                  file: recent,
+                  onOpen: () => _openPdf(recent.path),
+                );
+              } else {
+                return _buildArchiveViewMoreCard(recents.length, primaryBlue);
+              }
             },
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildArchiveViewMoreCard(int totalCount, Color primaryBlue) {
+    return Material(
+      color: const Color(0xFFF8FAFC),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => AllRecentsScreen(
+                onPickManual: _pickFileManually,
+              ),
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: primaryBlue.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.archive_outlined,
+                    color: primaryBlue, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'View Older PDFs & Archive',
+                      style: GoogleFonts.prompt(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF1E293B),
+                      ),
+                    ),
+                    Text(
+                      'All $totalCount recently opened documents with search',
+                      style: GoogleFonts.rubik(
+                        fontSize: 11.5,
+                        color: const Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.arrow_forward_ios_rounded,
+                  size: 14, color: Color(0xFF94A3B8)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

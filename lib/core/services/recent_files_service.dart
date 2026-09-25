@@ -30,7 +30,11 @@ class RecentFilesService {
       for (final raw in rawList) {
         try {
           final map = jsonDecode(raw) as Map<String, dynamic>;
-          files.add(RecentFile.fromJson(map));
+          final recent = RecentFile.fromJson(map);
+          // Never keep deleted / missing files in recent opened
+          if (File(recent.path).existsSync()) {
+            files.add(recent);
+          }
         } catch (e) {
           debugPrint('Error parsing recent file entry: $e');
         }
@@ -41,6 +45,11 @@ class RecentFilesService {
       recentFilesNotifier.value = files;
       _isInitialized = true;
 
+      // Re-persist if any deleted files were filtered out
+      if (files.length != rawList.length) {
+        await _persist(files);
+      }
+
       // In the background, ensure thumbnails exist for items missing thumbnails
       _ensureThumbnails(files);
     } catch (e) {
@@ -48,14 +57,39 @@ class RecentFilesService {
     }
   }
 
+  /// Removes any files that no longer exist on disk
+  Future<void> purgeMissingFiles() async {
+    try {
+      final currentList = List<RecentFile>.from(recentFilesNotifier.value);
+      final validList =
+          currentList.where((e) => File(e.path).existsSync()).toList();
+      if (validList.length != currentList.length) {
+        recentFilesNotifier.value = validList;
+        await _persist(validList);
+        debugPrint(
+            '[RecentFilesService] Purged ${currentList.length - validList.length} deleted files');
+      }
+    } catch (e) {
+      debugPrint('Error purging missing recent files: $e');
+    }
+  }
+
   Future<void> addRecent(String filePath, {int? pageCount}) async {
     try {
       final file = File(filePath);
-      final exists = file.existsSync();
-      final int sizeBytes = exists ? (tryGetFileSize(file) ?? 0) : 0;
+      if (!file.existsSync()) {
+        // Do not add non-existent or deleted files
+        return;
+      }
+
+      final int sizeBytes = tryGetFileSize(file) ?? 0;
       final fileName = filePath.split(RegExp(r'[\\/]')).last;
 
-      final currentList = List<RecentFile>.from(recentFilesNotifier.value);
+      // Filter out any missing files at the same time
+      final currentList = recentFilesNotifier.value
+          .where((e) => File(e.path).existsSync())
+          .toList();
+
       RecentFile? existing;
       final existingIndex = currentList.indexWhere((e) => e.path == filePath);
       if (existingIndex >= 0) {
@@ -86,6 +120,31 @@ class RecentFilesService {
       }
     } catch (e) {
       debugPrint('Error adding recent file: $e');
+    }
+  }
+
+  Future<void> updateFilePath(String oldPath, String newPath,
+      {String? newFileName}) async {
+    try {
+      final currentList = List<RecentFile>.from(recentFilesNotifier.value);
+      final index = currentList.indexWhere((e) => e.path == oldPath);
+      if (index >= 0) {
+        final item = currentList[index];
+        final name = newFileName ?? newPath.split(RegExp(r'[\\/]')).last;
+        final newFile = File(newPath);
+        final size = newFile.existsSync()
+            ? (tryGetFileSize(newFile) ?? item.fileSizeBytes)
+            : item.fileSizeBytes;
+        currentList[index] = item.copyWith(
+          path: newPath,
+          fileName: name,
+          fileSizeBytes: size,
+        );
+        recentFilesNotifier.value = currentList;
+        await _persist(currentList);
+      }
+    } catch (e) {
+      debugPrint('Error updating file path in recents: $e');
     }
   }
 

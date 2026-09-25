@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../../core/models/recent_file.dart';
+import '../../../../core/services/library_folder_service.dart';
 import '../../../../core/services/recent_files_service.dart';
 
 class RecentFileCard extends StatelessWidget {
@@ -132,7 +133,7 @@ class RecentFileCard extends StatelessWidget {
     final bool hasThumbnail = file.thumbnailPath != null &&
         File(file.thumbnailPath!).existsSync();
 
-    return Material(
+    final cardContent = Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
@@ -285,6 +286,27 @@ class RecentFileCard extends StatelessWidget {
                     }
                   } else if (value == 'share') {
                     _sharePdf(context);
+                  } else if (value == 'save_app') {
+                    LibraryFolderService.instance
+                        .savePdfToAppFolder(file.path)
+                        .then((result) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(result.isAlreadySaved
+                                ? 'This document is already in your Saved PDFs'
+                                : result.success
+                                    ? '✓ Saved to Smiley PDF Library'
+                                    : 'Could not save file to app storage'),
+                            backgroundColor: const Color(0xFF0D9488),
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        );
+                      }
+                    });
                   } else if (value == 'info') {
                     _showFileInfo(context);
                   } else if (value == 'remove') {
@@ -321,6 +343,25 @@ class RecentFileCard extends StatelessWidget {
                         const SizedBox(width: 10),
                         Text(
                           'Share PDF',
+                          style: GoogleFonts.rubik(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w500,
+                            color: fileExists ? textDark : const Color(0xFF94A3B8),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'save_app',
+                    enabled: fileExists,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.bookmark_add_outlined,
+                            size: 18, color: Color(0xFF0D9488)),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Save to Library',
                           style: GoogleFonts.rubik(
                             fontSize: 13.5,
                             fontWeight: FontWeight.w500,
@@ -373,6 +414,56 @@ class RecentFileCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+
+    return Dismissible(
+      key: ValueKey('recent_${file.path}'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        decoration: BoxDecoration(
+          color: const Color(0xFFE11D48),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.delete_outline_rounded,
+                color: Colors.white, size: 22),
+            const SizedBox(width: 6),
+            Text(
+              'Remove',
+              style: GoogleFonts.rubik(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+      ),
+      onDismissed: (_) {
+        RecentFilesService.instance.removeRecent(file.path);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Removed "${file.fileName}" from recents'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+            action: SnackBarAction(
+              label: 'Undo',
+              textColor: Colors.white,
+              onPressed: () {
+                RecentFilesService.instance.addRecent(
+                  file.path,
+                  pageCount: file.pageCount,
+                );
+              },
+            ),
+          ),
+        );
+      },
+      child: cardContent,
     );
   }
 
