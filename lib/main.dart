@@ -11,6 +11,7 @@ import 'features/home/presentation/widgets/app_bottom_nav_bar.dart';
 import 'features/home/presentation/widgets/placeholder_tab_view.dart';
 import 'features/home/presentation/widgets/quick_tools_section.dart';
 import 'features/home/presentation/widgets/recent_file_card.dart';
+import 'features/library/presentation/screens/library_screen.dart';
 import 'pdf_viewer_screen.dart';
 
 ThemeData buildSmileyPdfTheme() {
@@ -218,13 +219,7 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
 
     final List<Widget> pages = [
       _buildHomeBody(primaryBlue),
-      PlaceholderTabView(
-        title: 'Library',
-        description: 'Organize, tag, and browse all PDF documents across your device.',
-        icon: Icons.folder_copy_rounded,
-        actionLabel: 'Browse PDFs',
-        onAction: _pickFileManually,
-      ),
+      LibraryScreen(onPickManual: _pickFileManually),
       PlaceholderTabView(
         title: 'Search',
         description: 'Search document titles, metadata, and OCR-extracted text across all your files.',

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../../../core/models/recent_file.dart';
 import '../../../../core/services/recent_files_service.dart';
 
@@ -64,6 +65,34 @@ class RecentFileCard extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _sharePdf(BuildContext context) async {
+    try {
+      final xFile = XFile(
+        file.path,
+        mimeType: 'application/pdf',
+        name: file.fileName,
+      );
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [xFile],
+          subject: file.fileName,
+        ),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not share file: $e',
+              style: GoogleFonts.rubik(fontSize: 13),
+            ),
+            backgroundColor: const Color(0xFFDC2626),
+          ),
+        );
+      }
+    }
   }
 
   Widget _infoRow(String label, String value, {bool isPath = false}) {
@@ -254,6 +283,8 @@ class RecentFileCard extends StatelessWidget {
                     if (fileExists) {
                       onOpen();
                     }
+                  } else if (value == 'share') {
+                    _sharePdf(context);
                   } else if (value == 'info') {
                     _showFileInfo(context);
                   } else if (value == 'remove') {
@@ -271,6 +302,25 @@ class RecentFileCard extends StatelessWidget {
                         const SizedBox(width: 10),
                         Text(
                           'Open PDF',
+                          style: GoogleFonts.rubik(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w500,
+                            color: fileExists ? textDark : const Color(0xFF94A3B8),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'share',
+                    enabled: fileExists,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.share_outlined,
+                            size: 18, color: primaryBlue),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Share PDF',
                           style: GoogleFonts.rubik(
                             fontSize: 13.5,
                             fontWeight: FontWeight.w500,
