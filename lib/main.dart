@@ -5,6 +5,9 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'core/constants/app_constants.dart';
+import 'core/models/recent_file.dart';
+import 'core/services/recent_files_service.dart';
+import 'features/home/presentation/widgets/recent_file_card.dart';
 import 'pdf_viewer_screen.dart';
 
 ThemeData buildSmileyPdfTheme() {
@@ -67,8 +70,9 @@ ThemeData buildSmileyPdfTheme() {
   );
 }
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await RecentFilesService.instance.init();
   runApp(const SmileyPdfApp());
 }
 
@@ -137,6 +141,7 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
 
   void _openPdf(String path) {
     if (!mounted) return;
+    RecentFilesService.instance.addRecent(path);
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -154,6 +159,53 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
     if (files.isNotEmpty && files.first.path != null) {
       _openPdf(files.first.path!);
     }
+  }
+
+  void _confirmClearAll() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Clear Recent Files?',
+          style: GoogleFonts.prompt(fontSize: 18, fontWeight: FontWeight.w600),
+        ),
+        content: Text(
+          'This will clear your recently opened list. Your original files will not be deleted.',
+          style: GoogleFonts.rubik(fontSize: 14, color: const Color(0xFF64748B)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.rubik(
+                color: const Color(0xFF64748B),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              RecentFilesService.instance.clearAll();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE11D48),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            child: Text(
+              'Clear',
+              style: GoogleFonts.rubik(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -199,97 +251,285 @@ class _HomeOrganizerState extends State<HomeOrganizer> {
         ),
       ),
       body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // Real Smiley PDF Logo in hero circle
-                Container(
-                  width: 130,
-                  height: 130,
-                  decoration: BoxDecoration(
-                    color: primaryBlue.withValues(alpha: 0.08),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: primaryBlue.withValues(alpha: 0.12),
-                        blurRadius: 32,
-                        offset: const Offset(0, 12),
-                      ),
-                    ],
-                  ),
-                  padding: const EdgeInsets.all(22),
-                  child: Image.asset(
-                    'assets/images/appIcon_foreground.png',
-                    fit: BoxFit.contain,
-                  ),
-                ),
-                const SizedBox(height: 28),
-
-                // Clean headline & subtitle
-                Text(
-                  AppConstants.appName,
-                  style: GoogleFonts.prompt(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF1E293B),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 320),
-                  child: Text(
-                    'Open and read your PDF documents seamlessly, or receive files shared from other apps.',
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.rubik(
-                      fontSize: 14,
-                      color: const Color(0xFF64748B),
-                      height: 1.45,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 36),
-
-                // Single, clear, prominent Open PDF action button
-                SizedBox(
-                  width: 220,
-                  height: 52,
-                  child: ElevatedButton.icon(
-                    onPressed: _pickFileManually,
-                    icon: const Icon(Icons.folder_open_rounded, size: 22),
-                    label: Text(
-                      'Open PDF',
-                      style: GoogleFonts.rubik(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryBlue,
-                      foregroundColor: Colors.white,
-                      elevation: 2,
-                      shadowColor: primaryBlue.withValues(alpha: 0.35),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Supports .pdf files',
-                  style: GoogleFonts.rubik(
-                    fontSize: 12,
-                    color: const Color(0xFF94A3B8),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        child: ValueListenableBuilder<List<RecentFile>>(
+          valueListenable: RecentFilesService.instance.recentFilesNotifier,
+          builder: (context, recents, _) {
+            if (recents.isEmpty) {
+              return _buildEmptyState(primaryBlue);
+            }
+            return _buildRecentsState(recents, primaryBlue);
+          },
         ),
       ),
+      floatingActionButton: ValueListenableBuilder<List<RecentFile>>(
+        valueListenable: RecentFilesService.instance.recentFilesNotifier,
+        builder: (context, recents, _) {
+          if (recents.isEmpty) return const SizedBox.shrink();
+          return FloatingActionButton.extended(
+            onPressed: _pickFileManually,
+            backgroundColor: primaryBlue,
+            foregroundColor: Colors.white,
+            elevation: 3,
+            icon: const Icon(Icons.add_rounded, size: 22),
+            label: Text(
+              'Open PDF',
+              style: GoogleFonts.rubik(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(Color primaryBlue) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Real Smiley PDF Logo in hero circle
+            Container(
+              width: 130,
+              height: 130,
+              decoration: BoxDecoration(
+                color: primaryBlue.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: primaryBlue.withValues(alpha: 0.12),
+                    blurRadius: 32,
+                    offset: const Offset(0, 12),
+                  ),
+                ],
+              ),
+              padding: const EdgeInsets.all(22),
+              child: Image.asset(
+                'assets/images/appIcon_foreground.png',
+                fit: BoxFit.contain,
+              ),
+            ),
+            const SizedBox(height: 28),
+
+            // Clean headline & subtitle
+            Text(
+              AppConstants.appName,
+              style: GoogleFonts.prompt(
+                fontSize: 26,
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFF1E293B),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 320),
+              child: Text(
+                'Open and read your PDF documents seamlessly, or receive files shared from other apps.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.rubik(
+                  fontSize: 14,
+                  color: const Color(0xFF64748B),
+                  height: 1.45,
+                ),
+              ),
+            ),
+            const SizedBox(height: 36),
+
+            // Single, prominent Open PDF action button
+            SizedBox(
+              width: 220,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: _pickFileManually,
+                icon: const Icon(Icons.folder_open_rounded, size: 22),
+                label: Text(
+                  'Open PDF',
+                  style: GoogleFonts.rubik(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryBlue,
+                  foregroundColor: Colors.white,
+                  elevation: 2,
+                  shadowColor: primaryBlue.withValues(alpha: 0.35),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Supports .pdf files',
+              style: GoogleFonts.rubik(
+                fontSize: 12,
+                color: const Color(0xFF94A3B8),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecentsState(List<RecentFile> recents, Color primaryBlue) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Top quick-browse banner
+        Container(
+          margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF2596BE), Color(0xFF1B7A9D)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF2596BE).withValues(alpha: 0.25),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.folder_open_rounded,
+                  color: Colors.white,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Open Document',
+                      style: GoogleFonts.prompt(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Browse device files',
+                      style: GoogleFonts.rubik(
+                        fontSize: 12,
+                        color: Colors.white.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              ElevatedButton(
+                onPressed: _pickFileManually,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: primaryBlue,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  textStyle: GoogleFonts.rubik(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                child: const Text('Browse'),
+              ),
+            ],
+          ),
+        ),
+
+        // Section Header: "Recently Viewed" with count badge & Clear all
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 8, 16, 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    'Recently Viewed',
+                    style: GoogleFonts.prompt(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF1E293B),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: primaryBlue.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${recents.length}',
+                      style: GoogleFonts.rubik(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: primaryBlue,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              TextButton(
+                onPressed: _confirmClearAll,
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF94A3B8),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  'Clear all',
+                  style: GoogleFonts.rubik(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // List of Recently Viewed files
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
+            itemCount: recents.length,
+            separatorBuilder: (context, index) => const SizedBox(height: 10),
+            itemBuilder: (context, index) {
+              final recent = recents[index];
+              return RecentFileCard(
+                file: recent,
+                onOpen: () => _openPdf(recent.path),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

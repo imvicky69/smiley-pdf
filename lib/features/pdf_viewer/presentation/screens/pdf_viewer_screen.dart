@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:pdfrx/pdfrx.dart';
+import '../../../../core/services/recent_files_service.dart';
 
 class PdfViewerScreen extends StatefulWidget {
   final String filePath;
@@ -118,12 +119,18 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
             maxScale: 5.0,
           ),
 
+          // Document ready callback: immediate accurate page count
+          onViewerReady: (document, controller) {
+            final count = document.pages.length;
+            _pageCount.value = count;
+            RecentFilesService.instance.updatePageCount(widget.filePath, count);
+          },
+
           // Page change fires only when the visible page actually changes —
           // zero rebuilds during zoom/pan, only on page transitions
           onPageChanged: (pageNumber) {
             if (pageNumber != null) {
               _pageNumber.value = pageNumber;
-              // Grab pageCount from controller on first page change (doc is ready)
               if (_pageCount.value == 0 && _controller.isReady) {
                 _pageCount.value = _controller.pageCount;
               }
